@@ -87,3 +87,56 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log("API DUPAN rodando na porta", PORT);
 });
+// =========================
+// CREATE ORDER
+// =========================
+app.post("/orders", (req, res) => {
+  const { customerId, items } = req.body;
+
+  if (!customerId || !items || !items.length) {
+    return res.status(400).json({ error: "Pedido inválido" });
+  }
+
+  const db = readDB();
+
+  const customer = db.customers.find(c => c.id === customerId);
+  if (!customer) {
+    return res.status(404).json({ error: "Cliente não encontrado" });
+  }
+
+  let total = 0;
+
+  const orderItems = items.map(item => {
+    const product = db.products.find(p => p.id === item.productId);
+    if (!product) {
+      throw new Error(`Produto ${item.productId} não encontrado`);
+    }
+
+    const price = product.prices[customer.pricetable];
+    const subtotal = price * item.quantity;
+    total += subtotal;
+
+    return {
+      productId: product.id,
+      name: product.name,
+      quantity: item.quantity,
+      unitPrice: price,
+      subtotal
+    };
+  });
+
+  const order = {
+    id: `o${Date.now()}`,
+    customerId,
+    items: orderItems,
+    total,
+    status: "created",
+    createdAt: new Date().toISOString()
+  };
+
+  db.orders = db.orders || [];
+  db.orders.push(order);
+  writeDB(db);
+
+  res.status(201).json(order);
+});
