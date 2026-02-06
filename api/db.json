@@ -1,0 +1,30 @@
+{
+  "customers": [
+    {
+      "id": "c1",
+      "name": "Cliente Demo",
+      "email": "admin@cliente.com",
+      "password": "Admin@123",
+      "priceTable": "A",
+      "blocked": false
+    }
+  ],
+  "products": [
+    {
+      "id": "p1",
+      "name": "Café Especial 250g",
+      "sku": "CAFE250",
+      "prices": { "A": 39.9, "B": 42.9, "C": 45.9 },
+      "active": true
+    },
+    {
+      "id": "p2",
+      "name": "Café Especial 1kg",
+      "sku": "CAFE1K",
+      "prices": { "A": 129.9, "B": 139.9, "C": 149.9 },
+      "active": true
+    }
+  ],
+  "orders": [],
+  "invoices": []
+}
