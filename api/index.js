@@ -5,7 +5,7 @@ const path = require("path");
 const app = express();
 app.use(express.json());
 
-// ✅ CORS simples (para o frontend em outro domínio)
+// ✅ CORS (pra quando a gente ligar o Frontend)
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -26,18 +26,21 @@ function uuid() {
   return "id_" + Math.random().toString(16).slice(2) + Date.now().toString(16);
 }
 
-// Health
+// ✅ Health
 app.get("/health", (req, res) => res.json({ ok: true, service: "dupan-api" }));
 
-// Login simples (MVP)
+// ✅ Login simples (MVP)
 app.post("/auth/login", (req, res) => {
   const { email, password } = req.body || {};
   const db = readDb();
+
   const customer = db.customers.find((c) => c.email === email && c.password === password);
   if (!customer) return res.status(401).json({ ok: false, message: "Credenciais inválidas" });
   if (customer.blocked) return res.status(403).json({ ok: false, message: "Cliente bloqueado" });
 
+  // token simples (MVP). Depois vira JWT.
   const token = Buffer.from(`${customer.id}:${Date.now()}`).toString("base64");
+
   res.json({
     ok: true,
     token,
@@ -45,7 +48,7 @@ app.post("/auth/login", (req, res) => {
   });
 });
 
-// Auth middleware (MVP)
+// ✅ Middleware Auth (MVP)
 function requireAuth(req, res, next) {
   const auth = req.headers.authorization || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
@@ -61,6 +64,7 @@ function requireAuth(req, res, next) {
   const customerId = decoded.split(":")[0];
   const db = readDb();
   const customer = db.customers.find((c) => c.id === customerId);
+
   if (!customer) return res.status(401).json({ ok: false, message: "Token inválido" });
   if (customer.blocked) return res.status(403).json({ ok: false, message: "Cliente bloqueado" });
 
@@ -68,10 +72,11 @@ function requireAuth(req, res, next) {
   next();
 }
 
-// Catálogo com preço por tabela A/B/C
+// ✅ Catálogo com preço por tabela A/B/C do cliente
 app.get("/catalog", requireAuth, (req, res) => {
   const db = readDb();
   const table = req.customer.priceTable || "A";
+
   const items = db.products
     .filter((p) => p.active)
     .map((p) => ({
@@ -80,12 +85,20 @@ app.get("/catalog", requireAuth, (req, res) => {
       sku: p.sku,
       price: p.prices[table]
     }));
+
   res.json({ ok: true, table, items });
 });
 
-// Montar pedido novo
+/**
+ * ✅ POST /orders (Montar pedido novo)
+ * Regras:
+ * - entrega própria: date + window (MANHA/TARDE)
+ * - pagamento: boleto faturado (status OPEN)
+ * - bloqueia se houver invoice OVERDUE (vencida)
+ */
 app.post("/orders", requireAuth, (req, res) => {
   const { items, delivery } = req.body || {};
+
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ ok: false, message: "Items obrigatório" });
   }
@@ -95,8 +108,16 @@ app.post("/orders", requireAuth, (req, res) => {
 
   const db = readDb();
 
-  const overdue = db.invoices.some((inv) => inv.customerId === req.customer.id && inv.status === "OVERDUE");
-  if (overdue) return res.status(403).json({ ok: false, message: "Cliente com boleto vencido. Bloqueado para novos pedidos." });
+  // 🔒 bloqueio por boleto vencido
+  const overdue = db.invoices.some(
+    (inv) => inv.customerId === req.customer.id && inv.status === "OVERDUE"
+  );
+  if (overdue) {
+    return res.status(403).json({
+      ok: false,
+      message: "Cliente com boleto vencido. Bloqueado para novos pedidos."
+    });
+  }
 
   const table = req.customer.priceTable || "A";
 
@@ -104,19 +125,35 @@ app.post("/orders", requireAuth, (req, res) => {
     .map((it) => ({ productId: it.productId, qty: Number(it.qty || 0) }))
     .filter((it) => it.productId && it.qty > 0);
 
-  if (normalized.length === 0) return res.status(400).json({ ok: false, message: "Items inválidos" });
+  if (normalized.length === 0) {
+    return res.status(400).json({ ok: false, message: "Items inválidos" });
+  }
 
   let total = 0;
+
   const lines = normalized
     .map((it) => {
       const p = db.products.find((x) => x.id === it.productId);
       if (!p) return null;
+
       const unit = p.prices[table];
       const lineTotal = unit * it.qty;
       total += lineTotal;
-      return { productId: p.id, name: p.name, sku: p.sku, qty: it.qty, unitPrice: unit, lineTotal };
+
+      return {
+        productId: p.id,
+        name: p.name,
+        sku: p.sku,
+        qty: it.qty,
+        unitPrice: unit,
+        lineTotal: Math.round(lineTotal * 100) / 100
+      };
     })
     .filter(Boolean);
+
+  if (lines.length === 0) {
+    return res.status(400).json({ ok: false, message: "Nenhum produto válido" });
+  }
 
   const orderId = uuid();
   const order = {
@@ -124,35 +161,45 @@ app.post("/orders", requireAuth, (req, res) => {
     customerId: req.customer.id,
     createdAt: new Date().toISOString(),
     status: "CREATED",
-    delivery: { type: "OWN", date: delivery.date, window: delivery.window },
-    payment: { type: "BOLETO_FATURADO" },
     table,
+    payment: { type: "BOLETO_FATURADO" },
+    delivery: { type: "OWN", date: delivery.date, window: delivery.window },
     total: Math.round(total * 100) / 100,
     lines
   };
 
   db.orders.push(order);
 
+  // ✅ fatura (boleto faturado) simples
   const invoiceId = uuid();
   db.invoices.push({
     id: invoiceId,
     orderId,
     customerId: req.customer.id,
     status: "OPEN",
-    dueDate: delivery.date,
+    dueDate: delivery.date, // MVP: vencimento no dia da entrega
     amount: order.total
   });
 
   writeDb(db);
+
   res.status(201).json({ ok: true, order, invoiceId });
 });
 
-// Listar pedidos
+// ✅ Listar pedidos do cliente logado
 app.get("/orders", requireAuth, (req, res) => {
   const db = readDb();
   const orders = db.orders.filter((o) => o.customerId === req.customer.id).slice().reverse();
   res.json({ ok: true, orders });
 });
 
+// ✅ Listar faturas do cliente logado
+app.get("/invoices", requireAuth, (req, res) => {
+  const db = readDb();
+  const invoices = db.invoices.filter((i) => i.customerId === req.customer.id).slice().reverse();
+  res.json({ ok: true, invoices });
+});
+
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`API DUPAN rodando na porta ${PORT}`));
+
