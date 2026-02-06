@@ -81,9 +81,50 @@ app.post("/orders", (req, res) => {
 
   res.status(201).json(order);
 });
-
 // =======================
 const PORT = process.env.PORT || 10000;
+// ==========================
+// CREATE ORDER
+// ==========================
+app.post("/orders", (req, res) => {
+  const { productId, quantity } = req.body;
+
+  if (!productId || !quantity) {
+    return res.status(400).json({
+      error: "productId e quantity são obrigatórios"
+    });
+  }
+
+  const db = readDB();
+
+  const product = db.products.find(p => p.id === productId && p.active);
+
+  if (!product) {
+    return res.status(404).json({ error: "Produto não encontrado" });
+  }
+
+  const order = {
+    id: "o" + Date.now(),
+    productId,
+    quantity,
+    unitPrice: product.prices.A,
+    total: product.prices.A * quantity,
+    status: "created",
+    createdAt: new Date().toISOString()
+  };
+
+  db.orders = db.orders || [];
+  db.orders.push(order);
+
+  writeDB(db);
+
+  res.status(201).json({
+    message: "Pedido criado com sucesso",
+    order
+  });
+});
+
+
 app.listen(PORT, () => {
   console.log("API DUPAN rodando na porta", PORT);
 });
